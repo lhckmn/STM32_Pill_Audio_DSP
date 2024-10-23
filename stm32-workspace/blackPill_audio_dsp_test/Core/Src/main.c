@@ -36,6 +36,7 @@
 /* USER CODE BEGIN PD */
 
 #define BUFFER_SIZE 256
+#define NUM_TAPS 32
 
 /* USER CODE END PD */
 
@@ -61,6 +62,20 @@ uint16_t curr_sample_pos;
 bool processLowerBuffer;
 bool processUpperBuffer;
 
+arm_fir_instance_q15 filter1;
+q15_t filter1_state[(BUFFER_SIZE / 2) + NUM_TAPS - 1];
+q15_t filter1_coeffs[NUM_TAPS] = {
+		-553, -725, -881, -995, -1037, -981, -808,
+		-510, -93, 421, 998, 1593, 2154, 2631, 2977, 3159, 3159, 2977, 2631,
+		2154, 1593, 998, 421, -93, -510, -808, -981, -1037, -995, -881, -725,
+		-553
+};
+
+q15_t filter1_in[BUFFER_SIZE];
+q15_t filter1_out[BUFFER_SIZE];
+q15_t *filter1_in_ptr = &filter1_in[0];
+q15_t *filter1_out_ptr = &filter1_out[0];
+
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -71,6 +86,9 @@ static void MX_ADC1_Init(void);
 static void MX_TIM2_Init(void);
 static void MX_TIM3_Init(void);
 /* USER CODE BEGIN PFP */
+
+q15_t convert_adc_to_q15(uint16_t input);
+uint16_t convert_q15_to_dac(q15_t input);
 
 /* USER CODE END PFP */
 
@@ -101,6 +119,8 @@ int main(void)
 	//Resetting the flags for processing the two buffer halves
 	processLowerBuffer = false;
 	processUpperBuffer = false;
+
+	arm_fir_init_q15(&filter1, NUM_TAPS, &filter1_coeffs[0], &filter1_state[0], BUFFER_SIZE / 2);
 
   /* USER CODE END 1 */
 
@@ -150,11 +170,20 @@ int main(void)
 	//Processing the lower buffer if flag was set in the ISR
 	if(processLowerBuffer == true)
 	{
-		for(uint16_t i = 0; i < BUFFER_SIZE / 2; i++)
-		{
-			//Only transferring the samples (passthrough)
-			dac_buffer[i] = adc_buffer[i];
+		HAL_GPIO_WritePin(GPIOB, GPIO_PIN_7, 1);
+
+		for (uint16_t i = 0; i < BUFFER_SIZE / 2; i++) {
+			filter1_in[i] = convert_adc_to_q15(adc_buffer[i]);
 		}
+
+		arm_fir_fast_q15(&filter1, filter1_in_ptr, filter1_out_ptr,
+		BUFFER_SIZE / 2);
+
+		for (uint16_t i = 0; i < BUFFER_SIZE / 2; i++) {
+			dac_buffer[i] = convert_q15_to_dac(filter1_out[i]);
+		}
+
+		HAL_GPIO_WritePin(GPIOB, GPIO_PIN_7, 0);
 
 		//Resetting the flag
 		processLowerBuffer = false;
@@ -163,14 +192,22 @@ int main(void)
 	//Processing the upper buffer if flag was set in the ISR
 	if(processUpperBuffer == true)
 	{
-		for(uint16_t i = BUFFER_SIZE / 2; i < BUFFER_SIZE; i++)
-		{
-			//Only transferring the samples (passthrough)
-			dac_buffer[i] = adc_buffer[i];
+		HAL_GPIO_WritePin(GPIOB, GPIO_PIN_7, 1);
+
+		for (uint16_t i = BUFFER_SIZE / 2; i < BUFFER_SIZE; i++) {
+			filter1_in[i] = convert_adc_to_q15(adc_buffer[i]);
 		}
 
-		//Resetting the flag
+		arm_fir_fast_q15(&filter1, filter1_in_ptr + (BUFFER_SIZE / 2),
+				filter1_out_ptr + (BUFFER_SIZE / 2), BUFFER_SIZE / 2);
+
+		for (uint16_t i = BUFFER_SIZE / 2; i < BUFFER_SIZE; i++) {
+			dac_buffer[i] = convert_q15_to_dac(filter1_out[i]);
+		}
+
 		processUpperBuffer = false;
+
+		HAL_GPIO_WritePin(GPIOB, GPIO_PIN_7, 0);
 	}
     /* USER CODE END WHILE */
 
@@ -265,7 +302,7 @@ static void MX_ADC1_Init(void)
   */
   sConfig.Channel = ADC_CHANNEL_0;
   sConfig.Rank = 1;
-  sConfig.SamplingTime = ADC_SAMPLETIME_144CYCLES;
+  sConfig.SamplingTime = ADC_SAMPLETIME_480CYCLES;
   if (HAL_ADC_ConfigChannel(&hadc1, &sConfig) != HAL_OK)
   {
     Error_Handler();
@@ -433,12 +470,22 @@ static void MX_GPIO_Init(void)
   /*Configure GPIO pin Output Level */
   HAL_GPIO_WritePin(GPIOC, GPIO_PIN_13, GPIO_PIN_RESET);
 
+  /*Configure GPIO pin Output Level */
+  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_7, GPIO_PIN_RESET);
+
   /*Configure GPIO pin : PC13 */
   GPIO_InitStruct.Pin = GPIO_PIN_13;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
+
+  /*Configure GPIO pin : PB7 */
+  GPIO_InitStruct.Pin = GPIO_PIN_7;
+  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+  HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
 
 /* USER CODE BEGIN MX_GPIO_Init_2 */
 /* USER CODE END MX_GPIO_Init_2 */
@@ -476,6 +523,16 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 			curr_sample_pos = 0;
 		}
 	}
+}
+
+//Function to convert 12-bit ADC data to q15_t
+q15_t convert_adc_to_q15(uint16_t input) {
+	return (q15_t)((input << 3) - 32768);
+}
+
+//Function to convert q15_t to 12-bit DAC data
+uint16_t convert_q15_to_dac(q15_t input) {
+	return (uint16_t)((input + 32768) >> 3);
 }
 
 /* USER CODE END 4 */
