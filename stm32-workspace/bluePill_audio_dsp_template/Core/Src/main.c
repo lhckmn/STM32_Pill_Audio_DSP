@@ -22,6 +22,9 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 
+#include "arm_math.h"
+#include <stdbool.h>
+
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -31,6 +34,8 @@
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
+
+#define BUFFER_SIZE 256
 
 /* USER CODE END PD */
 
@@ -47,6 +52,14 @@ TIM_HandleTypeDef htim2;
 TIM_HandleTypeDef htim3;
 
 /* USER CODE BEGIN PV */
+
+uint16_t adc_buffer[BUFFER_SIZE];
+uint16_t dac_buffer[BUFFER_SIZE];
+
+uint16_t curr_sample_pos;
+
+bool processLowerBuffer;
+bool processUpperBuffer;
 
 /* USER CODE END PV */
 
@@ -75,6 +88,20 @@ int main(void)
 
   /* USER CODE BEGIN 1 */
 
+	//Clearing the buffers
+	for(uint16_t i = 0; i < BUFFER_SIZE; i++)
+	{
+		adc_buffer[i] = 0;
+		dac_buffer[i] = 0;
+	}
+
+	//Setting current position of the sample to begin of the buffer's lower half
+	curr_sample_pos = BUFFER_SIZE / 2;
+
+	//Resetting the flags for processing the two buffer halves
+	processLowerBuffer = false;
+	processUpperBuffer = false;
+
   /* USER CODE END 1 */
 
   /* MCU Configuration--------------------------------------------------------*/
@@ -101,12 +128,50 @@ int main(void)
   MX_TIM2_Init();
   /* USER CODE BEGIN 2 */
 
+  //Turning off the on-board LED (inverted)
+  HAL_GPIO_WritePin(GPIOC, GPIO_PIN_13, 1);
+
+  //Starting ADC1 with DMA
+  HAL_ADC_Start_DMA(&hadc1, (uint32_t*) adc_buffer, BUFFER_SIZE);
+
+  //Starting TIM3 (triggering conversions and data transfer) with interrupts
+  HAL_TIM_Base_Start_IT(&htim3);
+
+  //Starting TIM2 (PWM generation)
+  HAL_TIM_PWM_Start(&htim2, TIM_CHANNEL_1);
+  HAL_TIM_PWM_Start(&htim2, TIM_CHANNEL_2);
+
   /* USER CODE END 2 */
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
   while (1)
   {
+	//Processing the lower buffer if flag was set in the ISR
+	if(processLowerBuffer == true)
+	{
+		for(uint16_t i = 0; i < BUFFER_SIZE / 2; i++)
+		{
+			//Only transferring the samples (passthrough)
+			dac_buffer[i] = adc_buffer[i];
+		}
+
+		//Resetting the flag
+		processLowerBuffer = false;
+	}
+
+	//Processing the upper buffer if flag was set in the ISR
+	if(processUpperBuffer == true)
+	{
+		for(uint16_t i = BUFFER_SIZE / 2; i < BUFFER_SIZE; i++)
+		{
+			//Only transferring the samples (passthrough)
+			dac_buffer[i] = adc_buffer[i];
+		}
+
+		//Resetting the flag
+		processUpperBuffer = false;
+	}
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
@@ -364,9 +429,6 @@ static void MX_GPIO_Init(void)
   /*Configure GPIO pin Output Level */
   HAL_GPIO_WritePin(GPIOC, GPIO_PIN_13, GPIO_PIN_RESET);
 
-  /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_7, GPIO_PIN_RESET);
-
   /*Configure GPIO pin : PC13 */
   GPIO_InitStruct.Pin = GPIO_PIN_13;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
@@ -374,19 +436,44 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
 
-  /*Configure GPIO pin : PB7 */
-  GPIO_InitStruct.Pin = GPIO_PIN_7;
-  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
-  GPIO_InitStruct.Pull = GPIO_NOPULL;
-  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
-  HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
-
 /* USER CODE BEGIN MX_GPIO_Init_2 */
 /* USER CODE END MX_GPIO_Init_2 */
 }
 
 /* USER CODE BEGIN 4 */
+void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
+{
+	//Checking if the interrupt was caused by TIM3 (triggering conversions and data transfer)
+	if (htim->Instance == TIM3)
+	{
+		//Incrementing the position of the current sample
+		curr_sample_pos++;
 
+		//Wrapping around if end of the buffer was reached
+		if (curr_sample_pos >= BUFFER_SIZE)
+		{
+			curr_sample_pos = 0;
+		}
+
+		//Setting the output sample's upper six bits to CCR1 (channel 1) and the lower six bits to CCR2 (channel 2)
+		htim2.Instance->CCR1 = (dac_buffer[curr_sample_pos] & 0xFC0) >> 6;
+		htim2.Instance->CCR2 = dac_buffer[curr_sample_pos] & 0xF3;
+
+		//Setting flag for processing the lower half of the ADC's buffer
+		if (curr_sample_pos == BUFFER_SIZE / 2)
+		{
+			processLowerBuffer = true;
+			return;
+		}
+
+		//Setting flag for processing the upper half of the ADC's buffer
+		if (curr_sample_pos == BUFFER_SIZE - 1)
+		{
+			processUpperBuffer = true;
+			return;
+		}
+	}
+}
 /* USER CODE END 4 */
 
 /**
