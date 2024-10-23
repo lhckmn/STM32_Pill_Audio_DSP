@@ -451,15 +451,6 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 	//Checking if the interrupt was caused by TIM3 (triggering conversions and data transfer)
 	if (htim->Instance == TIM3)
 	{
-		//Incrementing the position of the current sample
-		curr_sample_pos++;
-
-		//Wrapping around if end of the buffer was reached
-		if (curr_sample_pos >= BUFFER_SIZE)
-		{
-			curr_sample_pos = 0;
-		}
-
 		//Setting the output sample's upper six bits to CCR1 (channel 1) and the lower six bits to CCR2 (channel 2)
 		htim2.Instance->CCR1 = (dac_buffer[curr_sample_pos] & 0xFC0) >> 6;
 		htim2.Instance->CCR2 = dac_buffer[curr_sample_pos] & 0xF3;
@@ -468,14 +459,21 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 		if (curr_sample_pos == BUFFER_SIZE / 2)
 		{
 			processLowerBuffer = true;
-			return;
 		}
 
 		//Setting flag for processing the upper half of the ADC's buffer
 		if (curr_sample_pos == BUFFER_SIZE - 1)
 		{
 			processUpperBuffer = true;
-			return;
+		}
+
+		//Incrementing the position of the current sample
+		curr_sample_pos++;
+
+		//Wrapping around if end of the buffer was reached
+		if (curr_sample_pos >= BUFFER_SIZE)
+		{
+			curr_sample_pos = 0;
 		}
 	}
 }
