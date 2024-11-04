@@ -265,7 +265,7 @@ static void MX_ADC1_Init(void)
   */
   sConfig.Channel = ADC_CHANNEL_0;
   sConfig.Rank = 1;
-  sConfig.SamplingTime = ADC_SAMPLETIME_84CYCLES;
+  sConfig.SamplingTime = ADC_SAMPLETIME_144CYCLES;
   if (HAL_ADC_ConfigChannel(&hadc1, &sConfig) != HAL_OK)
   {
     Error_Handler();
@@ -273,7 +273,7 @@ static void MX_ADC1_Init(void)
 
   /** Configure for the selected ADC regular channel its corresponding rank in the sequencer and its sample time.
   */
-  sConfig.Channel = ADC_CHANNEL_2;
+  sConfig.Channel = ADC_CHANNEL_1;
   sConfig.Rank = 2;
   if (HAL_ADC_ConfigChannel(&hadc1, &sConfig) != HAL_OK)
   {
@@ -505,6 +505,7 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 	}
 }
 
+
 void process_data()
 {
 	//Separating the ADC data of the two channels into two input buffers for the filters
@@ -517,7 +518,7 @@ void process_data()
 	//Copying the data of one input buffer to the DAC's output buffer to build a passthrough
 	for(uint16_t i = 0; i < BUFFER_SIZE / 2; i++)
 	{
-		dac_process_ptr[i] = convert_q15_to_dac(filter1_in[i]);
+		dac_process_ptr[i] = convert_q15_to_dac(filter2_in[i]);
 	}
 }
 
